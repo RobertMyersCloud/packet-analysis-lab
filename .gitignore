@@ -1,0 +1,9 @@
+# Raw packet captures retained locally
+captures/
+*.pcap
+*.pcapng
+
+# OS / editor artifacts
+.DS_Store
+Thumbs.db
+desktop.ini

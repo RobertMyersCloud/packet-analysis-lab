@@ -45,13 +45,13 @@ The lab progresses from normal traffic to troubleshooting and finally to control
 
 | System | Role | Address |
 |---|---|---|
-| Windows 11 workstation | Wireshark analysis / traffic generation | 10.10.20.102 |
-| Fedora workstation | tcpdump capture / protected lab host | 10.10.30.100 |
-| ER605 | Inter-network routing / policy boundary | 10.10.20.1 / 10.10.30.1 |
-| Fedora gateway segment | Protected lab network | 10.10.30.0/24 |
-| Management segment | Management / test network | 10.10.20.0/24 |
+| Windows 11 workstation (Victus) | Wireshark analysis / traffic generation | 10.10.20.102 |
+| Fedora host (ENVY) | tcpdump capture / protected lab host | 10.10.30.100 |
+| ER605 | Routing between the two lab networks / policy boundary | 10.10.20.1 / 10.10.30.1 |
+| Lab LAN (VLAN 1) | Windows workstation's lab network | 10.10.20.0/24 |
+| Protected VLAN (VLAN 30) | Fedora host's network | 10.10.30.0/24 |
 
-The Windows workstation also had normal internet access through its household network. Fedora's lab-side network was intentionally restricted from normal internet egress during part of the testing, which became useful for DNS failure analysis.
+Both machines were also connected to the household network over Wi-Fi during this lab. The Windows workstation used it for normal internet access, which is where the working DNS capture in section 6 came from.
 
 Raw PCAP files are retained locally and excluded from the public repository. Public evidence uses sanitized screenshots.
 
@@ -119,7 +119,7 @@ The packet showed:
 
 ```text
 Layer 2:
-ER605 MAC -> Fedora MAC
+ER605 MAC -> ENVY (Fedora) MAC
 
 Layer 3:
 10.10.20.102 -> 10.10.30.100
@@ -182,9 +182,9 @@ Fedora sent DNS queries that never received a response.
 
 > **Correction (October 5, 2026):** This section originally attributed the failure to lab policy blocking the upstream path. That was wrong. The resolver `10.10.31.1` is not on any lab subnet; it was a typo in the ER605's VLAN30 DHCP pool (the gateway is `10.10.30.1`). The capture below is unchanged. Only the explanation was corrected. Root cause, fix, and validation are documented in [prove-it NET-008, Finding 1](https://github.com/RobertMyersCloud/prove-it/blob/main/01-networking/NET-008-protected-systems-enclave/README.md#re-test-and-fixes--october-5-2026).
 
-![tcpdump DNS blocked retries](evidence/07-tcpdump-dns-blocked-retries.png)
+![tcpdump unanswered DNS retries](evidence/07-tcpdump-dns-unanswered-retries.png)
 
-The capture showed the same DNS transaction retried multiple times:
+The capture showed the same DNS query sent three times, five seconds apart:
 
 ```text
 10.10.30.100:53000 -> 10.10.31.1:53  A? example.com
@@ -195,9 +195,9 @@ with no response packets.
 This proved:
 
 - the client generated valid DNS queries
-- the queries left the Fedora host
+- the queries reached the capture point on the Fedora host
 - the client retried the same unresolved transaction
-- the failure was farther down the path than the application simply "not trying"
+- nothing ever answered
 
 What it did **not** prove was *why* nothing answered. Silent retries look the same whether a firewall drops the query or the resolver address doesn't exist. Checking the client's configured resolver (`resolvectl status`) and where it came from (`nmcli -f DHCP4 device show`) would have separated those two causes before a conclusion was drawn.
 
@@ -205,7 +205,7 @@ What it did **not** prove was *why* nothing answered. Silent retries look the sa
 
 ## 6. Working DNS Query and Response
 
-A healthy DNS exchange was captured on the Windows workstation using `1.1.1.1`.
+A healthy DNS exchange was captured on the Windows workstation using `1.1.1.1`, over its household internet connection.
 
 ![Wireshark working DNS query response](evidence/08-wireshark-dns-working-query-response.png)
 
@@ -279,11 +279,13 @@ Pattern:
 
 ```text
 SYN -> no response
-SYN retransmission -> no response
-SYN retransmission -> no response
+SYN retransmission (~1 s later) -> no response
+SYN retransmission (~2 s later) -> no response
+SYN retransmission (~4 s later) -> no response
+SYN retransmission (~8 s later) -> no response
 ```
 
-The retransmission timing increased approximately 1, 2, 4, and 8 seconds.
+The gap doubled each time: about 1, 2, 4, and 8 seconds. That's TCP exponential backoff.
 
 | State | Packet Pattern | Likely Interpretation |
 |---|---|---|
@@ -471,7 +473,7 @@ Packet analysis can identify strong indicators and narrow an investigation, but 
 | 04 | [Wireshark routed SSH frame](evidence/04-wireshark-routed-ssh-frame.png) |
 | 05 | [Wireshark SSH metadata and encryption](evidence/05-wireshark-ssh-metadata-and-encryption.png) |
 | 06 | [Wireshark Follow TCP Stream SSH](evidence/06-wireshark-follow-tcp-stream-ssh.png) |
-| 07 | [tcpdump blocked DNS retries](evidence/07-tcpdump-dns-blocked-retries.png) |
+| 07 | [tcpdump unanswered DNS retries](evidence/07-tcpdump-dns-unanswered-retries.png) |
 | 08 | [Wireshark working DNS query and response](evidence/08-wireshark-dns-working-query-response.png) |
 | 09 | [Wireshark DNS response details](evidence/09-wireshark-dns-response-details.png) |
 | 10 | [tcpdump closed-port RST](evidence/10-tcpdump-closed-port-rst.png) |

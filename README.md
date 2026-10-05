@@ -178,7 +178,9 @@ Even with encryption, an analyst can still observe endpoints, ports, timing, pac
 
 ## 5. DNS Failure: Queries Without Responses
 
-Fedora had a DNS server configured, but the lab policy prevented the expected upstream communication path from working.
+Fedora sent DNS queries that never received a response.
+
+> **Correction (October 5, 2026):** This section originally attributed the failure to lab policy blocking the upstream path. That was wrong. The resolver `10.10.31.1` is not on any lab subnet; it was a typo in the ER605's VLAN30 DHCP pool (the gateway is `10.10.30.1`). The capture below is unchanged. Only the explanation was corrected. Root cause, fix, and validation are documented in [prove-it NET-008, Finding 1](https://github.com/RobertMyersCloud/prove-it/blob/main/01-networking/NET-008-protected-systems-enclave/README.md#re-test-and-fixes--october-5-2026).
 
 ![tcpdump DNS blocked retries](evidence/07-tcpdump-dns-blocked-retries.png)
 
@@ -196,6 +198,8 @@ This proved:
 - the queries left the Fedora host
 - the client retried the same unresolved transaction
 - the failure was farther down the path than the application simply "not trying"
+
+What it did **not** prove was *why* nothing answered. Silent retries look the same whether a firewall drops the query or the resolver address doesn't exist. Checking the client's configured resolver (`resolvectl status`) and where it came from (`nmcli -f DHCP4 device show`) would have separated those two causes before a conclusion was drawn.
 
 ---
 

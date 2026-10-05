@@ -1,43 +1,22 @@
 # Packet Analysis Lab
 
-Hands-on packet analysis with **tcpdump** and **Wireshark**, combining networking fundamentals, troubleshooting, and security-oriented traffic analysis.
+Hands-on packet analysis with **tcpdump** and **Wireshark**, built in my home lab while I was learning both tools.
 
-This project was built in a controlled home lab to move beyond command memorization and answer a practical question:
+I captured traffic between two lab hosts and worked through it in three stages: normal traffic, troubleshooting, and a couple of controlled "suspicious" patterns. The question I was trying to answer:
 
 > Can I capture traffic, explain what the network is doing, recognize when behavior is abnormal, and support conclusions with packet-level evidence?
 
-The lab progresses from normal traffic to troubleshooting and finally to controlled suspicious patterns. The goal is not to label every anomaly as malicious. It is to understand what the packets actually support.
+The goal was not to label every anomaly as malicious. It was to understand what the packets actually support.
 
----
+## Hiring Claim
 
-## What This Project Demonstrates
+> After reviewing this artifact, a hiring manager has evidence that I can read tcpdump and Wireshark output, explain ARP, ICMP, TCP, DNS, and SSH behavior from it, tell open, closed, and filtered ports apart on the wire, and keep conclusions within what the packets show.
 
-### Network fundamentals
-- ARP request/reply behavior
-- ICMP echo request/reply analysis
-- TCP three-way handshake
-- TCP sequence and acknowledgment numbers
-- Source and destination ports
-- Routed Layer 2 vs Layer 3 behavior
-- TTL behavior across a routed hop
-- SSH protocol negotiation and encrypted traffic
-- DNS queries, responses, record types, transaction IDs, and TTLs
+## What's Covered
 
-### Troubleshooting
-- Working vs failed DNS resolution
-- Open vs closed vs filtered TCP ports
-- SYN, SYN/ACK, ACK, RST/ACK, and retransmission behavior
-- Distinguishing service failure from path or policy failure
-- Using tcpdump for remote command-line triage
-- Using Wireshark for deeper packet inspection
-
-### Security analysis
-- Controlled reconnaissance / port-enumeration pattern
-- One-source / one-target / many-port behavior
-- Repeated SYN activity
-- Periodic beacon-like traffic
-- Metadata visible in encrypted SSH
-- Separating suspicious indicators from proof of compromise
+- **Fundamentals:** ARP, ICMP echo, the TCP three-way handshake, routed Layer 2 vs Layer 3 headers, IP TTL, SSH key-exchange metadata, DNS fields
+- **Troubleshooting:** an unanswered DNS query vs a working one; open vs closed vs filtered TCP ports
+- **Security patterns:** a controlled one-source, many-port probe and controlled periodic HTTP requests, and what those patterns do and don't prove
 
 ---
 
@@ -46,14 +25,16 @@ The lab progresses from normal traffic to troubleshooting and finally to control
 | System | Role | Address |
 |---|---|---|
 | Windows 11 workstation (Victus) | Wireshark analysis / traffic generation | 10.10.20.102 |
-| Fedora host (ENVY) | tcpdump capture / protected lab host | 10.10.30.100 |
+| Fedora host (ENVY, hostname `fedora`) | tcpdump capture / target host | 10.10.30.100 |
 | ER605 | Routing between the two lab networks / policy boundary | 10.10.20.1 / 10.10.30.1 |
 | Lab LAN (VLAN 1) | Windows workstation's lab network | 10.10.20.0/24 |
-| Protected VLAN (VLAN 30) | Fedora host's network | 10.10.30.0/24 |
+| VLAN 30 (intended protected segment) | Fedora host's network | 10.10.30.0/24 |
 
-Both machines were also connected to the household network over Wi-Fi during this lab. The Windows workstation used it for normal internet access, which is where the working DNS capture in section 6 came from.
+Both machines were also connected to the household network over Wi-Fi during this lab. The Windows workstation was 192.168.1.18 on that network and used it for normal internet access, which is where the working DNS capture in section 6 came from. Because Fedora was dual-homed too, it wasn't actually isolated behind the ER605 at the time. VLAN 30 was meant to be a protected segment, but the Wi-Fi connection gave Fedora a second path that didn't go through it.
 
 Raw PCAP files are retained locally and excluded from the public repository. Public evidence uses sanitized screenshots.
+
+> **Corrections (October 5, 2026):** I re-checked each section against its screenshots and corrected several descriptions: who sent the ARP request (section 1), what the SSH screenshot shows (section 4), what the DNS capture point proves (section 5), where the filtered-port drop happened (section 7), and the full probe results (section 8). The screenshots are unchanged.
 
 ---
 
@@ -61,13 +42,17 @@ Raw PCAP files are retained locally and excluded from the public repository. Pub
 
 ## 1. ARP and ICMP Baseline
 
-The first capture established a basic local-network baseline between Fedora and its gateway.
-
-A tcpdump capture showed ARP resolution followed by ICMP echo requests and replies.
+The first capture was taken on Fedora while it pinged its gateway, the ER605 at 10.10.30.1.
 
 ![tcpdump ARP and ICMP capture](evidence/01-tcpdump-arp-icmp-capture.png)
 
-Key observations:
+What the capture shows:
+
+- At 20:59:29 the **gateway** sent an ARP request, `who-has 10.10.30.100 tell 10.10.30.1`, and Fedora replied with its MAC. That was about 15 seconds before the first ping, and the same exchange repeated at 21:00:21. This is the router refreshing its ARP entry for Fedora, not Fedora resolving the gateway before the ping.
+- Fedora never sent an ARP request for 10.10.30.1 in this capture, so it already had the gateway's MAC cached.
+- Four echo requests and four replies followed, about one second apart, all with ICMP id 27787 and sequence numbers 1 through 4.
+
+Background on what these fields mean:
 
 - ARP resolves an IPv4 address to a Layer 2 MAC address on the local broadcast domain.
 - The ARP cache and the switch CAM/MAC table are different:
@@ -77,41 +62,40 @@ Key observations:
 - The identifier helps associate packets with the same echo session/process.
 - The sequence number distinguishes individual requests within that session.
 
-Wireshark provided the same ICMP exchange in a more visual form.
+Wireshark showed the same ICMP exchange in a more visual form.
 
 ![Wireshark ICMP baseline](evidence/02-wireshark-icmp-baseline.png)
 
-The four request/reply pairs show a clean baseline with matching echo sequence numbers.
+Wireshark shows the identifier in hex (`id=0x6c8b`, which is 27787) and pairs each request with its reply. The four request/reply pairs have matching sequence numbers and a TTL of 64.
 
 ---
 
 ## 2. TCP Three-Way Handshake over SSH
 
-A fresh Windows-to-Fedora SSH session was captured with tcpdump.
+I captured a fresh SSH session from Windows to Fedora with tcpdump.
 
 ![tcpdump SSH three-way handshake](evidence/03-tcpdump-ssh-three-way-handshake.png)
 
 The connection began with:
 
 ```text
-Windows 10.10.20.102:<ephemeral> -> Fedora 10.10.30.100:22  SYN
-Fedora  10.10.30.100:22         -> Windows <ephemeral>     SYN, ACK
-Windows <ephemeral>              -> Fedora :22              ACK
+10.10.20.102.58717 > 10.10.30.100.22   [S]   seq 666497634
+10.10.30.100.22 > 10.10.20.102.58717   [S.]  seq 3579192003, ack 666497635
+10.10.20.102.58717 > 10.10.30.100.22   [.]   ack 1
 ```
 
-Important points:
+What this shows:
 
-- The Windows client used an ephemeral source port.
-- Fedora listened on TCP/22.
-- The SYN consumes one sequence number.
-- Each side maintains its own independent TCP sequence space.
-- Wireshark relative sequence numbering makes the stream easier to follow than raw 32-bit values.
+- The Windows client used ephemeral source port 58717. Fedora listened on TCP/22.
+- The SYN consumes one sequence number: Fedora acknowledged 666497635, one more than the client's SYN sequence number.
+- Each side has its own independent sequence space (666497634 for the client, 3579192003 for Fedora).
+- After the handshake, tcpdump switches to relative numbers (`ack 1` on the third line). Wireshark does the same by default, which makes the stream easier to follow than raw 32-bit values.
 
 ---
 
 ## 3. Routed Layer 2 vs Layer 3 Behavior
 
-A routed SSH packet showed one of the most useful networking concepts in the project.
+Frame 7 of the same SSH capture shows how routing changes the Ethernet header but not the IP header.
 
 ![Wireshark routed SSH frame](evidence/04-wireshark-routed-ssh-frame.png)
 
@@ -125,7 +109,7 @@ Layer 3:
 10.10.20.102 -> 10.10.30.100
 
 TCP:
-ephemeral port -> 22
+58717 -> 22
 ```
 
 Because Windows and Fedora were on different subnets, the ER605 routed the packet into the Fedora network.
@@ -148,29 +132,30 @@ The captured packet also showed a TTL of 127, consistent with a packet that like
 
 ## 4. SSH Metadata and Encryption
 
-The SSH session demonstrated that encryption protects the interactive session but does not make all metadata disappear.
+Screenshot 05 is the Windows client's Key Exchange Init (KEXINIT) message. It lists the algorithms the client **offered**, in order of preference:
+
+- key exchange (`curve25519-sha256` first)
+- host-key types
+- encryption, for each direction (`chacha20-poly1305@openssh.com` first)
+- MAC/integrity
+- compression (`none,zlib@openssh.com,zlib`)
 
 ![Wireshark SSH metadata and encryption](evidence/05-wireshark-ssh-metadata-and-encryption.png)
 
-Visible information included:
+These lists are offers, not the result. The negotiated values come from comparing the client's lists with the server's. Wireshark does that comparison once it has seen both KEXINIT messages and shows the outcome on the summary lines: `Key Exchange (method:curve25519-sha256)` and `encryption:chacha20-poly1305@openssh.com mac:<implicit> compression:none`. The MAC shows as implicit because chacha20-poly1305 provides its own integrity check.
 
-- SSHv2
-- key-exchange algorithms
-- host-key algorithms
-- encryption algorithms
-- integrity/authentication options
-- compression options
-- direction of traffic
+The Follow TCP Stream view shows both version banners in plain text:
 
-A Follow TCP Stream view showed the readable client and server banners before the stream became largely opaque.
+- client (red): `SSH-2.0-OpenSSH_for_Windows_9.5`
+- server (blue): `SSH-2.0-OpenSSH_10.2`
 
 ![Wireshark Follow TCP Stream SSH](evidence/06-wireshark-follow-tcp-stream-ssh.png)
 
-The key lesson:
+Both KEXINIT algorithm lists follow, also readable. The server's key-exchange list starts with `mlkem768x25519-sha256`, but the client's full list doesn't include it, so it couldn't be chosen. The first client preference the server also supports, `curve25519-sha256`, matches what Wireshark reports in screenshot 05. After key exchange finishes (NEWKEYS), the rest of the stream is encrypted and shows up as unreadable bytes.
 
-> TCP stream reconstruction can rebuild the byte stream, but it does not decrypt an SSH session.
+Follow TCP Stream rebuilds the byte stream. It doesn't decrypt an SSH session.
 
-Even with encryption, an analyst can still observe endpoints, ports, timing, packet sizes, TCP state, software banners, key-exchange behavior, and traffic direction.
+Even with encryption, I could still see endpoints, ports, timing, packet sizes, TCP state, software versions, the offered and negotiated algorithms, and traffic direction.
 
 ---
 
@@ -184,20 +169,23 @@ Fedora sent DNS queries that never received a response.
 
 ![tcpdump unanswered DNS retries](evidence/07-tcpdump-dns-unanswered-retries.png)
 
-The capture showed the same DNS query sent three times, five seconds apart:
+The capture showed the same DNS query sent three times, five seconds apart, with the same transaction ID (12045) and the same source port:
 
 ```text
-10.10.30.100:53000 -> 10.10.31.1:53  A? example.com
+10.10.30.100.53000 > 10.10.31.1.53: 12045+ [1au] A? example.com.
 ```
 
 with no response packets.
 
 This proved:
 
-- the client generated valid DNS queries
-- the queries reached the capture point on the Fedora host
-- the client retried the same unresolved transaction
-- nothing ever answered
+- Fedora sent well-formed DNS queries for `example.com` to 10.10.31.1
+- the same transaction was retried, unchanged
+- nothing answered during the capture
+
+The capture was taken on Fedora itself, so it shows the queries were sent, not that they left the host or reached the network. The capture interface and the route Fedora used toward 10.10.31.1 aren't shown.
+
+The fixed source port 53000 and the same transaction ID repeated at 5-second spacing look like a manually run lookup tool (for example `dig`), not the system resolver. This looks like a manual query with a fixed source port; I didn't capture the command.
 
 What it did **not** prove was *why* nothing answered. Silent retries look the same whether a firewall drops the query or the resolver address doesn't exist. Checking the client's configured resolver (`resolvectl status`) and where it came from (`nmcli -f DHCP4 device show`) would have separated those two causes before a conclusion was drawn.
 
@@ -205,17 +193,11 @@ What it did **not** prove was *why* nothing answered. Silent retries look the sa
 
 ## 6. Working DNS Query and Response
 
-A healthy DNS exchange was captured on the Windows workstation using `1.1.1.1`, over its household internet connection.
+For reference, this is a working DNS exchange. It is not a controlled comparison with section 5: it's a different host (Victus, on household Wi-Fi as 192.168.1.18), a different resolver (`1.1.1.1`), a different name, and a different network.
 
 ![Wireshark working DNS query response](evidence/08-wireshark-dns-working-query-response.png)
 
-The query and response for `www.googleapis.com` demonstrated:
-
-- client-to-resolver query
-- resolver-to-client response
-- matching DNS transaction IDs
-- A record resolution
-- normal request/response behavior
+The A query for `www.googleapis.com` went out with transaction ID `0x0002`, and the response came back with the same ID. An AAAA query (`0x0003`) followed the same way.
 
 The detailed response showed the DNS answer structure.
 
@@ -223,14 +205,11 @@ The detailed response showed the DNS answer structure.
 
 The response included:
 
-- standard query response
-- no error
-- one question
-- multiple answer resource records
-- Type A
-- Class IN
-- IPv4 addresses
-- DNS TTL values
+- flags `0x8180`: standard query response, no error
+- 1 question, 8 answer records
+- each answer: Type A, Class IN, an IPv4 address
+- DNS TTL of 235 seconds (3 minutes, 55 seconds)
+- response time of about 55 ms after the request
 
 | Field | Purpose |
 |---|---|
@@ -243,7 +222,7 @@ The response included:
 
 ### Open port
 
-The working SSH service on TCP/22 showed:
+The working SSH service on TCP/22 showed (section 2):
 
 ```text
 SYN -> SYN/ACK -> ACK
@@ -253,7 +232,7 @@ Interpretation: host reachable, service listening, TCP connection established.
 
 ### Closed port
 
-A controlled connection attempt to TCP/65000 produced an immediate reset.
+A connection attempt from Windows to TCP/65000 on Fedora was answered immediately with a reset. In Fedora's capture, the RST/ACK went out less than a millisecond after the SYN, acknowledging 1898909320 (the SYN's sequence number plus one).
 
 ![tcpdump closed port RST](evidence/10-tcpdump-closed-port-rst.png)
 
@@ -265,11 +244,13 @@ Pattern:
 SYN -> RST/ACK
 ```
 
+Windows retried after each RST. The capture shows five SYNs from the same source port (57451) with the same sequence number, about 0.5 seconds apart, and every one was answered with an RST.
+
 Interpretation: the target host was reachable, but nothing was listening on that destination port.
 
 ### Filtered / dropped port
 
-A temporary host firewall drop rule was used on TCP/65001.
+I added a temporary host firewall drop rule on Fedora for TCP/65001. The rule command isn't shown in the screenshots.
 
 ![tcpdump filtered port timeout](evidence/12-tcpdump-filtered-port-timeout.png)
 
@@ -287,11 +268,13 @@ SYN retransmission (~8 s later) -> no response
 
 The gap doubled each time: about 1, 2, 4, and 8 seconds. That's TCP exponential backoff.
 
+This capture was taken on Fedora, the target. tcpdump sees inbound packets before the host firewall acts on them, so the SYNs showing up here means they made it across the network to Fedora. The drop happened on the host, in its firewall, not somewhere in the network path.
+
 | State | Packet Pattern | Likely Interpretation |
 |---|---|---|
 | Open | SYN → SYN/ACK → ACK | Host reachable, service listening |
 | Closed | SYN → RST/ACK | Host reachable, service not listening |
-| Filtered / dropped | SYN → retries → silence | Traffic being dropped or path/policy issue |
+| Filtered / dropped | SYN → retries → silence | Traffic dropped by a firewall or lost on the path. In this lab the SYNs reached the target's own capture, so the target's host firewall dropped them |
 
 ---
 
@@ -299,29 +282,32 @@ The gap doubled each time: about 1, 2, 4, and 8 seconds. That's TCP exponential 
 
 ## 8. Controlled Reconnaissance Pattern
 
-A bounded test generated connection attempts from one source against multiple service ports on the Fedora target.
+A bounded test from Windows sent connection attempts to 11 ports on Fedora, about 0.5 seconds apart, over roughly 5 seconds. The command that generated it isn't shown.
 
 ![tcpdump controlled recon pattern](evidence/14-tcpdump-controlled-recon-pattern.png)
 
-Ports included examples such as:
+Ports probed:
 
 ```text
-21
-22
-23
-25
-53
-80
-110
-443
-445
-3389
-65000
+21, 22, 23, 25, 53, 80, 110, 443, 445, 3389, 65000
 ```
 
-Wireshark made the pattern more obvious by filtering for SYN packets.
+Results from the capture:
+
+| Port | Response in capture | Reading |
+|---|---|---|
+| 22 | SYN/ACK; the client completed the handshake and closed right away (the server's `SSH-2.0-OpenSSH_10.2` banner appears before the client's reset) | Open |
+| 3389 | RST/ACK (SYN sent twice, RST both times) | Closed |
+| 65000 | RST/ACK (SYN sent twice, RST both times) | Closed |
+| 21, 23, 25, 53, 80, 110, 443, 445 | One SYN each, no reply | No answer (filtered) |
+
+3389 and 65000 answered with RST, so nothing was listening there and the firewall didn't filter those ports. The other eight got no reply at all. I didn't capture the firewall configuration, so this table is what the packets show, not an explanation of the rule set.
+
+In Wireshark I filtered on the SYN flag, which also shows SYN/ACKs. Frame 3 is Fedora's SYN/ACK from port 22. The filter bar isn't in the screenshot.
 
 ![Wireshark controlled recon SYN pattern](evidence/15-wireshark-controlled-recon-syn-pattern.png)
+
+Wireshark also marked the second attempts to 3389 and 65000 as `[TCP Port numbers reused]`, because Windows retried from the same source port.
 
 What made the activity stand out was the behavior:
 
@@ -332,7 +318,7 @@ one target
 +
 many destination ports
 +
-short time interval
+about 5 seconds
 ```
 
 The observed pattern was **consistent with reconnaissance or port enumeration**.
@@ -343,31 +329,33 @@ It was not treated as proof of malicious intent or compromise.
 
 ## 9. Controlled Periodic Beacon-Like Traffic
 
-A temporary HTTP service was started on Fedora, and the Windows host made repeated requests at approximately ten-second intervals.
+I ran a temporary HTTP service on Fedora on TCP/65002, and the Windows host requested it repeatedly at about ten-second intervals. The command that started the server and the client-side loop aren't shown in the screenshots.
 
 ![tcpdump periodic traffic pattern](evidence/16-tcpdump-periodic-traffic-pattern.png)
 
-The activity occurred at approximately:
+The tcpdump screenshot (captured 2026-10-02) shows six connections. Their SYN times:
 
 ```text
-22:59:43
-22:59:53
-23:00:03
-23:00:13
-23:00:23
-23:00:33
+22:59:43.056780
+22:59:53.107083
+23:00:03.151165
+23:00:13.192764
+23:00:23.232099
+23:00:33.265288
 ```
 
-Wireshark showed repeated connection bursts to the same destination and service.
+The gaps were 10.050, 10.044, 10.042, 10.039, and 10.033 seconds, an average of about 10.04 seconds. The sixth connection is cut off at the bottom of the screenshot after its FIN.
+
+The Wireshark screenshot covers the same capture from the start: four complete bursts and the SYN of the fifth at 40.175 seconds.
 
 ![Wireshark periodic beacon-like pattern](evidence/17-wireshark-periodic-beacon-like-pattern.png)
 
 Each burst included:
 
-- TCP handshake
-- HTTP request
-- HTTP response
-- connection teardown
+- TCP handshake from a new ephemeral port
+- `GET / HTTP/1.1` from Windows
+- `HTTP/1.0 200 OK (text/html)` from Fedora
+- connection teardown (FIN from both sides)
 
 Consistent periodic communication can be an indicator of beacon-like behavior.
 
@@ -405,58 +393,41 @@ Packet analysis can identify strong indicators and narrow an investigation, but 
 
 # Tools Used
 
-- **tcpdump**
-  - interface selection
-  - capture filters
-  - host filters
-  - protocol filters
-  - port filters
-  - bounded captures
-  - PCAP creation
-  - offline PCAP reading
+- **tcpdump** (on Fedora)
+  - reading saved captures with `-r`
+  - `-nn` to skip name and port resolution
+  - `-tttt` for full date and time stamps (section 9)
+  - piping output through `sed` to redact MAC addresses (section 1)
 
-- **Wireshark**
+- **Wireshark** (on Windows)
   - display filters
-  - packet dissection
-  - protocol fields
-  - TCP sequence and acknowledgment analysis
-  - TCP flag analysis
-  - DNS inspection
-  - SSH metadata
+  - packet list and packet details
+  - TCP sequence/acknowledgment and flag fields
+  - DNS and SSH dissection
   - Follow TCP Stream
-  - retransmission identification
-  - timing analysis
+  - retransmission and port-reuse markers
+  - relative timestamps for timing
 
-- **PowerShell**
-  - connection testing
-  - traffic generation
-  - controlled port probes
-  - periodic HTTP requests
-
-- **Linux / Fedora**
-  - tcpdump capture point
-  - SSH service
-  - temporary HTTP service
-  - controlled firewall testing
+The capture commands and the PowerShell traffic generators aren't shown in the screenshots.
 
 ---
 
 # Key Takeaways
 
 1. **Packet capture separates symptoms from causes.**  
-   A failed connection can mean an unreachable path, a silent firewall drop, or a closed service. Those conditions look different on the wire.
+   A failed connection can mean a silent firewall drop, a closed port, or a path problem. Those look different on the wire, and where the capture was taken matters for which one you can rule out.
 
 2. **tcpdump and Wireshark serve different purposes.**  
-   tcpdump is effective for remote capture and fast command-line triage. Wireshark is better for deep visual analysis.
+   tcpdump gave me fast text output from the saved captures. Wireshark made fields, flags, and patterns easier to inspect.
 
 3. **Layer 2 and Layer 3 tell different parts of the path.**  
-   Routed packets keep their Layer 3 endpoints while Ethernet headers change for the local hop.
+   Routed packets keep their Layer 3 endpoints while the Ethernet header changes for the local hop.
 
 4. **Encryption does not eliminate metadata.**  
-   SSH protects the interactive contents, but endpoint, timing, protocol, version, size, and negotiation metadata remain observable.
+   SSH protects the session contents, but endpoints, timing, sizes, software versions, and the key-exchange offers are visible.
 
 5. **Patterns matter more than isolated packets.**  
-   One SYN is normal. One source probing many ports quickly is more interesting. Repeated communication at fixed intervals is more interesting. Context determines whether those indicators are expected or suspicious.
+   One SYN is normal. One source probing many ports in a few seconds is more interesting. Repeated connections every 10 seconds are more interesting. Context decides whether those are expected or suspicious.
 
 6. **An indicator is not the same thing as proof.**  
    Recon-like and beacon-like traffic should trigger investigation, not automatic claims of compromise.
@@ -507,18 +478,6 @@ RFC1918 lab IP addresses, test ports, protocol metadata, and controlled test tra
 
 ---
 
-# Result
+# Status
 
-This lab started as practice with tcpdump and Wireshark and developed into a compact packet-analysis investigation.
-
-The final project demonstrates the ability to:
-
-- capture traffic remotely
-- analyze packets at multiple protocol layers
-- explain TCP and DNS behavior
-- distinguish open, closed, and filtered services
-- recognize recon-like patterns
-- recognize periodic beacon-like patterns
-- work with encrypted-session metadata
-- troubleshoot from packet evidence
-- make conclusions that stay within what the traffic actually proves
+**PROVEN** for reading and explaining the traffic in these screenshots. Limits: the capture commands, traffic-generation commands, and firewall rules aren't shown, and Fedora was dual-homed on household Wi-Fi during the lab, so it wasn't isolated.

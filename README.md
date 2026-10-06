@@ -25,12 +25,6 @@ Reading tcpdump and Wireshark output, explaining ARP, ICMP, TCP, DNS, and SSH be
 | 8 | 11-port probe in about 5 seconds | 1 open, 2 reset, 8 no response |
 | 9 | HTTP every 10 seconds | Gaps of 10.033 to 10.050 seconds, average about 10.04 |
 
-## What's Covered
-
-- **Fundamentals:** ARP, ICMP echo, the TCP three-way handshake, routed Layer 2 vs Layer 3 headers, IP TTL, SSH key-exchange metadata, DNS fields
-- **Troubleshooting:** an unanswered DNS query vs a working one; open vs closed vs filtered TCP ports
-- **Security patterns:** a controlled one-source, many-port probe and controlled periodic HTTP requests, and what those patterns do and don't prove
-
 ---
 
 ## Lab Context

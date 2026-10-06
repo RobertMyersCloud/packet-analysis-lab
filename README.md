@@ -8,9 +8,22 @@ I captured traffic between two lab hosts and worked through it in three stages: 
 
 The goal was not to label every anomaly as malicious. It was to understand what the packets actually support.
 
-## Hiring Claim
+## Skills Demonstrated
 
-> After reviewing this artifact, a hiring manager has evidence that I can read tcpdump and Wireshark output, explain ARP, ICMP, TCP, DNS, and SSH behavior from it, tell open, closed, and filtered ports apart on the wire, and keep conclusions within what the packets show.
+Reading tcpdump and Wireshark output, explaining ARP, ICMP, TCP, DNS, and SSH behavior from it, telling open, closed, and filtered ports apart on the wire, and keeping conclusions within what the packets show.
+
+## Results at a Glance
+
+| Section | Test | What the packets showed |
+|---|---|---|
+| 1 | Fedora pings its gateway | 4 request/reply pairs, ICMP id 27787; the gateway sent its own ARP requests for Fedora |
+| 2 | SSH handshake | SYN, SYN/ACK acknowledging the client's sequence number plus one, ACK |
+| 3 | Routed SSH frame | Ethernet header rewritten for the last hop; source and destination IPs unchanged; TTL 128 → 127 |
+| 4 | SSH key exchange | Version banners and algorithm offers readable; negotiated `curve25519-sha256` and `chacha20-poly1305` |
+| 5 | DNS failure | Same query 3 times, 5 seconds apart, no reply. The cause, found later, was a typo in the DHCP-assigned resolver |
+| 7 | Open, closed, dropped port | SYN/ACK; RST/ACK; SYN retries at about 1, 2, 4, and 8 seconds |
+| 8 | 11-port probe in about 5 seconds | 1 open, 2 reset, 8 no response |
+| 9 | HTTP every 10 seconds | Gaps of 10.033 to 10.050 seconds, average about 10.04 |
 
 ## What's Covered
 
@@ -46,8 +59,8 @@ The first capture was taken on Fedora while it pinged its gateway, the ER605 at 
 
 What the capture shows:
 
-- At 20:59:29 the **gateway** sent an ARP request, `who-has 10.10.30.100 tell 10.10.30.1`, and Fedora replied with its MAC. That was about 15 seconds before the first ping, and the same exchange repeated at 21:00:21. This is the router refreshing its ARP entry for Fedora, not Fedora resolving the gateway before the ping.
-- Fedora never sent an ARP request for 10.10.30.1 in this capture, so it already had the gateway's MAC cached.
+- At 20:59:29 the **gateway** sent an ARP request, `who-has 10.10.30.100 tell 10.10.30.1`, and Fedora replied with its MAC. That was about 15 seconds before the first ping, and the same exchange repeated at 21:00:21. That looks like the router re-checking its entry for Fedora, though the capture doesn't show why it sent them. It wasn't Fedora resolving the gateway before the ping.
+- Fedora never sent an ARP request for 10.10.30.1 in this capture, which is consistent with it already having the gateway's MAC in its neighbor cache.
 - Four echo requests and four replies followed, about one second apart, all with ICMP id 27787 and sequence numbers 1 through 4.
 
 Background on what these fields mean:
@@ -93,7 +106,7 @@ What this shows:
 
 ## 3. Routed Layer 2 vs Layer 3 Behavior
 
-Frame 7 of the same SSH capture shows how routing changes the Ethernet header but not the IP header.
+Frame 7 of the same SSH capture shows what routing changes and what it doesn't. The Ethernet header is rewritten for the last hop, and the source and destination IP addresses stay the same. The TTL drops by one, and the router recalculates the IP header checksum to match.
 
 ![Wireshark routed SSH frame](evidence/04-wireshark-routed-ssh-frame.png)
 
@@ -183,7 +196,7 @@ This proved:
 
 The capture was taken on Fedora itself, so it shows the queries were sent, not that they left the host or reached the network. The capture interface and the route Fedora used toward 10.10.31.1 aren't shown.
 
-The fixed source port 53000 and the same transaction ID repeated at 5-second spacing look like a manually run lookup tool (for example `dig`), not the system resolver. This looks like a manual query with a fixed source port; I didn't capture the command.
+I didn't capture the command that generated these queries.
 
 What it did **not** prove was *why* nothing answered. Silent retries look the same whether a firewall drops the query or the resolver address doesn't exist. Checking the client's configured resolver (`resolvectl status`) and where it came from (`nmcli -f DHCP4 device show`) would have separated those two causes before a conclusion was drawn.
 
@@ -244,7 +257,7 @@ SYN -> RST/ACK
 
 Windows retried after each RST. The capture shows five SYNs from the same source port (57451) with the same sequence number, about 0.5 seconds apart, and every one was answered with an RST.
 
-Interpretation: the target host was reachable, but nothing was listening on that destination port.
+Interpretation: the target host was reachable, and the port answered with a reset. That's how a port with no listener normally responds. A firewall can also send resets, and I didn't capture the listener state, so the packets alone don't prove which.
 
 ### Filtered / dropped port
 
@@ -266,13 +279,13 @@ SYN retransmission (~8 s later) -> no response
 
 The gap doubled each time: about 1, 2, 4, and 8 seconds. That's TCP exponential backoff.
 
-This capture was taken on Fedora, the target. tcpdump sees inbound packets before the host firewall acts on them, so the SYNs showing up here means they made it across the network to Fedora. The drop happened on the host, in its firewall, not somewhere in the network path.
+This capture was taken on Fedora, the target. tcpdump sees inbound packets before the host firewall acts on them, so the SYNs showing up here means they made it across the network to Fedora. What the packets show: the SYNs arrived and nothing answered. What I set up: a drop rule for this port. Together those point to the host firewall, but the rule and its counters aren't in the evidence.
 
 | State | Packet Pattern | Likely Interpretation |
 |---|---|---|
 | Open | SYN → SYN/ACK → ACK | Host reachable, service listening |
 | Closed | SYN → RST/ACK | Host reachable, service not listening |
-| Filtered / dropped | SYN → retries → silence | Traffic dropped by a firewall or lost on the path. In this lab the SYNs reached the target's own capture, so the target's host firewall dropped them |
+| Filtered / dropped | SYN → retries → silence | Traffic dropped by a firewall or lost on the path. In this lab the SYNs reached the target's own capture, so the drop was at the target, consistent with the drop rule I added |
 
 ---
 
@@ -297,9 +310,9 @@ Results from the capture:
 | 22 | SYN/ACK; the client completed the handshake and closed right away (the server's `SSH-2.0-OpenSSH_10.2` banner appears before the client's reset) | Open |
 | 3389 | RST/ACK (SYN sent twice, RST both times) | Closed |
 | 65000 | RST/ACK (SYN sent twice, RST both times) | Closed |
-| 21, 23, 25, 53, 80, 110, 443, 445 | One SYN each, no reply | No answer (filtered) |
+| 21, 23, 25, 53, 80, 110, 443, 445 | One SYN each, no reply | No response observed; consistent with filtering |
 
-3389 and 65000 answered with RST, so nothing was listening there and the firewall didn't filter those ports. The other eight got no reply at all. I didn't capture the firewall configuration, so this table is what the packets show, not an explanation of the rule set.
+3389 and 65000 answered with RST, which is how a port with no listener normally responds. The other eight got no reply at all. I didn't capture the firewall configuration, the listener state, or the capture command (screenshot 14 is a read-back of the saved file), so I can't rule out that ICMP rejections were left out of the capture. This table is what the packets show, not an explanation of the rule set.
 
 In Wireshark I filtered on the SYN flag, which also shows SYN/ACKs. Frame 3 is Fedora's SYN/ACK from port 22. The filter bar isn't in the screenshot.
 
@@ -353,7 +366,7 @@ Each burst included:
 - TCP handshake from a new ephemeral port
 - `GET / HTTP/1.1` from Windows
 - `HTTP/1.0 200 OK (text/html)` from Fedora
-- connection teardown (FIN from both sides)
+- connection teardown: the server's FIN rides on its last data segment (`[FP.]` in screenshot 16; Wireshark labels that frame `HTTP/1.0 200 OK`), and the client sends its own FIN
 
 Consistent periodic communication can be an indicator of beacon-like behavior.
 
@@ -480,8 +493,10 @@ RFC1918 lab IP addresses, test ports, protocol metadata, and controlled test tra
 
 **October 5, 2026:** I re-checked each section against its screenshots and corrected several descriptions: who sent the ARP request (section 1), what the SSH screenshot shows (section 4), what the DNS capture point proves (section 5), where the filtered-port drop happened (section 7), and the full probe results (section 8). The screenshots are unchanged.
 
+**October 6, 2026:** Tightened wording where the text claimed more than the packets show: what routing changes in the IP header (section 3), closed and unanswered ports (sections 7 and 8), the filtered-port conclusion (section 7), and the ARP and DNS inferences (sections 1 and 5). Pointed the section 9 teardown to the server's `[FP.]` segments in screenshot 16. Added a results table.
+
 ---
 
 # Status
 
-**PROVEN** for reading and explaining the traffic in these screenshots. Limits: the capture commands, traffic-generation commands, and firewall rules aren't shown, and Fedora was dual-homed on household Wi-Fi during the lab, so it wasn't isolated.
+**Complete.** Screenshot-based analysis of saved captures. Limits: the capture commands, traffic-generation commands, and firewall rules aren't shown, and Fedora was dual-homed on household Wi-Fi during the lab, so it wasn't isolated.

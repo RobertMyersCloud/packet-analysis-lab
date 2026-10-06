@@ -16,14 +16,15 @@ Reading tcpdump and Wireshark output, explaining ARP, ICMP, TCP, DNS, and SSH be
 
 | Section | Test | What the packets showed |
 |---|---|---|
-| 1 | Fedora pings its gateway | 4 request/reply pairs, ICMP id 27787; the gateway sent its own ARP requests for Fedora |
-| 2 | SSH handshake | SYN, SYN/ACK acknowledging the client's sequence number plus one, ACK |
-| 3 | Routed SSH frame | Ethernet header rewritten for the last hop; source and destination IPs unchanged; TTL 127, consistent with one routed hop from an initial 128 |
-| 4 | SSH key exchange | Version banners and algorithm offers readable; negotiated `curve25519-sha256` and `chacha20-poly1305` |
-| 5 | DNS failure | Same query 3 times, 5 seconds apart, no reply. The cause, found later, was a typo in the DHCP-assigned resolver |
-| 7 | Open, closed, dropped port | SYN/ACK; RST/ACK; SYN retries at about 1, 2, 4, and 8 seconds |
-| 8 | 11-port probe in about 5 seconds | 1 open, 2 reset, 8 no response |
-| 9 | HTTP every 10 seconds | Gaps of 10.033 to 10.050 seconds, average about 10.04 |
+| [1](#1-arp-and-icmp-baseline) | Fedora pings its gateway | 4 request/reply pairs, ICMP id 27787; the gateway sent its own ARP requests for Fedora |
+| [2](#2-tcp-three-way-handshake-over-ssh) | SSH handshake | SYN, SYN/ACK acknowledging the client's sequence number plus one, ACK |
+| [3](#3-routed-layer-2-vs-layer-3-behavior) | Routed SSH frame | Ethernet header rewritten for the last hop; source and destination IPs unchanged; TTL 127, consistent with one routed hop from an initial 128 |
+| [4](#4-ssh-metadata-and-encryption) | SSH key exchange | Version banners and algorithm offers readable; negotiated `curve25519-sha256` and `chacha20-poly1305` |
+| [5](#5-dns-failure-queries-without-responses) | DNS failure | Same query 3 times, 5 seconds apart, no reply. The cause, found later, was a typo in the DHCP-assigned resolver |
+| [6](#6-working-dns-query-and-response) | Working DNS lookup for reference | Query and response with matching transaction ID `0x0002`, 8 A records, DNS TTL 235 seconds |
+| [7](#7-open-closed-and-filtered-tcp-states) | Open, closed, dropped port | SYN/ACK; RST/ACK; SYN retries at about 1, 2, 4, and 8 seconds |
+| [8](#8-controlled-reconnaissance-pattern) | 11-port probe in about 5 seconds | 1 open, 2 reset, 8 no response |
+| [9](#9-controlled-periodic-beacon-like-traffic) | HTTP every 10 seconds | Gaps of 10.033 to 10.050 seconds, average about 10.04 |
 
 ---
 
@@ -117,19 +118,7 @@ TCP:
 58717 -> 22
 ```
 
-Because Windows and Fedora were on different subnets, the ER605 routed the packet into the Fedora network.
-
-The IP source and destination remained:
-
-```text
-10.10.20.102 -> 10.10.30.100
-```
-
-while the Ethernet header represented the final local hop:
-
-```text
-ER605 -> Fedora
-```
+Because Windows and Fedora were on different subnets, the ER605 routed the packet into the Fedora network. This frame was captured on the destination side, so it shows the last hop only: the Ethernet addresses are the ER605's and Fedora's, while the IP addresses are still the original Windows source and Fedora destination.
 
 The captured packet also showed a TTL of 127, consistent with a packet that likely started at a common Windows default of 128 and crossed one routed hop.
 
@@ -182,17 +171,19 @@ The capture showed the same DNS query sent three times, five seconds apart, with
 
 with no response packets.
 
-This proved:
+What the capture shows:
 
 - Fedora sent well-formed DNS queries for `example.com` to 10.10.31.1
 - the same transaction was retried, unchanged
-- nothing answered during the capture
+- no responses appear in the captured traffic
 
 The capture was taken on Fedora itself, so it shows the queries were sent, not that they left the host or reached the network. The capture interface and the route Fedora used toward 10.10.31.1 aren't shown.
 
 I didn't capture the command that generated these queries.
 
 What it did **not** prove was *why* nothing answered. Silent retries look the same whether a firewall drops the query or the resolver address doesn't exist. Checking the client's configured resolver (`resolvectl status`) and where it came from (`nmcli -f DHCP4 device show`) would have separated those two causes before a conclusion was drawn.
+
+**Outcome:** I later traced the address to its source. The ER605's VLAN 30 DHCP pool was handing out `10.10.31.1` as the DNS server, a typo for the gateway `10.10.30.1`. After I corrected it, `resolvectl query` resolved names through the lab interface. Details and evidence are in [prove-it NET-008, Finding 1](https://github.com/RobertMyersCloud/prove-it/blob/main/01-networking/NET-008-protected-systems-enclave/README.md#re-test-and-fixes--october-5-2026).
 
 ---
 
@@ -278,7 +269,7 @@ This capture was taken on Fedora, the target. tcpdump sees inbound packets befor
 | State | Packet Pattern | Likely Interpretation |
 |---|---|---|
 | Open | SYN → SYN/ACK → ACK | Host reachable, service listening |
-| Closed | SYN → RST/ACK | Host reachable, service not listening |
+| Closed | SYN → RST/ACK | Host reachable; consistent with no listener (a firewall can also send resets) |
 | Filtered / dropped | SYN → retries → silence | Traffic dropped by a firewall or lost on the path. In this lab the SYNs reached Fedora; no response was captured, consistent with the configured host drop rule |
 
 ---
@@ -483,11 +474,22 @@ RFC1918 lab IP addresses, test ports, protocol metadata, and controlled test tra
 
 ---
 
+# What I Check First Now
+
+The corrections in this lab changed what I verify before drawing a conclusion:
+
+- every interface and route on the hosts involved (`ip -br link`, `ip route`), so a second path can't hide
+- where a resolver address actually comes from (`resolvectl status`, the DHCP options, the server's pool), not just whether queries are answered
+- where the capture was taken and what its filter could have left out
+- the configuration behind an observation, such as a firewall rule and its counters, before naming the cause
+
+---
+
 # Revision Notes
 
 **October 5, 2026:** I re-checked each section against its screenshots and corrected several descriptions: who sent the ARP request (section 1), what the SSH screenshot shows (section 4), what the DNS capture point proves (section 5), where the filtered-port drop happened (section 7), and the full probe results (section 8). The screenshots are unchanged.
 
-**October 6, 2026:** Tightened wording where the text claimed more than the packets show: what routing changes in the IP header (section 3), closed and unanswered ports (sections 7 and 8), the filtered-port conclusion (section 7), and the ARP and DNS inferences (sections 1 and 5). Pointed the section 9 teardown to the server's `[FP.]` segments in screenshot 16. Added a results table.
+**October 6, 2026:** Tightened wording where the text claimed more than the packets show: what routing changes in the IP header (section 3), closed and unanswered ports (sections 7 and 8), the filtered-port conclusion (section 7), and the ARP and DNS inferences (sections 1 and 5). Pointed the section 9 teardown to the server's `[FP.]` segments in screenshot 16. Added a results table. Later the same day: linked the results table to each section, brought the DNS outcome into section 5, and added what I check first now.
 
 ---
 

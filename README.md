@@ -18,7 +18,7 @@ Reading tcpdump and Wireshark output, explaining ARP, ICMP, TCP, DNS, and SSH be
 |---|---|---|
 | 1 | Fedora pings its gateway | 4 request/reply pairs, ICMP id 27787; the gateway sent its own ARP requests for Fedora |
 | 2 | SSH handshake | SYN, SYN/ACK acknowledging the client's sequence number plus one, ACK |
-| 3 | Routed SSH frame | Ethernet header rewritten for the last hop; source and destination IPs unchanged; TTL 128 → 127 |
+| 3 | Routed SSH frame | Ethernet header rewritten for the last hop; source and destination IPs unchanged; TTL 127, consistent with one routed hop from an initial 128 |
 | 4 | SSH key exchange | Version banners and algorithm offers readable; negotiated `curve25519-sha256` and `chacha20-poly1305` |
 | 5 | DNS failure | Same query 3 times, 5 seconds apart, no reply. The cause, found later, was a typo in the DHCP-assigned resolver |
 | 7 | Open, closed, dropped port | SYN/ACK; RST/ACK; SYN retries at about 1, 2, 4, and 8 seconds |
@@ -285,7 +285,7 @@ This capture was taken on Fedora, the target. tcpdump sees inbound packets befor
 |---|---|---|
 | Open | SYN → SYN/ACK → ACK | Host reachable, service listening |
 | Closed | SYN → RST/ACK | Host reachable, service not listening |
-| Filtered / dropped | SYN → retries → silence | Traffic dropped by a firewall or lost on the path. In this lab the SYNs reached the target's own capture, so the drop was at the target, consistent with the drop rule I added |
+| Filtered / dropped | SYN → retries → silence | Traffic dropped by a firewall or lost on the path. In this lab the SYNs reached Fedora; no response was captured, consistent with the configured host drop rule |
 
 ---
 

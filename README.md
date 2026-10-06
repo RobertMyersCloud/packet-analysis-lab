@@ -30,11 +30,9 @@ The goal was not to label every anomaly as malicious. It was to understand what 
 | Lab LAN (VLAN 1) | Windows workstation's lab network | 10.10.20.0/24 |
 | VLAN 30 (intended protected segment) | Fedora host's network | 10.10.30.0/24 |
 
-Both machines were also connected to the household network over Wi-Fi during this lab. The Windows workstation was 192.168.1.18 on that network and used it for normal internet access, which is where the working DNS capture in section 6 came from. Because Fedora was dual-homed too, it wasn't actually isolated behind the ER605 at the time. VLAN 30 was meant to be a protected segment, but the Wi-Fi connection gave Fedora a second path that didn't go through it.
+Both machines were also connected to the household network over Wi-Fi during this lab. The Windows workstation was 192.168.1.18 on that network and used it for normal internet access, which is where the working DNS capture in section 6 came from. Because Fedora was dual-homed too, it wasn't actually isolated behind the ER605 at the time. VLAN 30 was meant to be a protected segment, but the Wi-Fi connection gave Fedora a second path that didn't go through it. I found and fixed that afterward: Fedora's Wi-Fi was turned off and the enclave was re-tested in [prove-it NET-008](https://github.com/RobertMyersCloud/prove-it/blob/main/01-networking/NET-008-protected-systems-enclave/README.md#re-test-and-fixes--october-5-2026).
 
 Raw PCAP files are retained locally and excluded from the public repository. Public evidence uses sanitized screenshots.
-
-> **Corrections (October 5, 2026):** I re-checked each section against its screenshots and corrected several descriptions: who sent the ARP request (section 1), what the SSH screenshot shows (section 4), what the DNS capture point proves (section 5), where the filtered-port drop happened (section 7), and the full probe results (section 8). The screenshots are unchanged.
 
 ---
 
@@ -408,7 +406,7 @@ Packet analysis can identify strong indicators and narrow an investigation, but 
   - retransmission and port-reuse markers
   - relative timestamps for timing
 
-The capture commands and the PowerShell traffic generators aren't shown in the screenshots.
+The capture commands and the PowerShell traffic generators aren't shown in the screenshots. A bounded live capture with the full command and its packet counts is shown in [prove-it NET-002](https://github.com/RobertMyersCloud/prove-it/blob/main/01-networking/NET-002-tcp-udp-traffic-analysis/README.md#bounded-capture).
 
 ---
 
@@ -475,6 +473,12 @@ Before publication, screenshots were reviewed to remove or avoid:
 - unnecessary system identifiers
 
 RFC1918 lab IP addresses, test ports, protocol metadata, and controlled test traffic remain visible because they are necessary to explain the network behavior demonstrated by the project.
+
+---
+
+# Revision Notes
+
+**October 5, 2026:** I re-checked each section against its screenshots and corrected several descriptions: who sent the ARP request (section 1), what the SSH screenshot shows (section 4), what the DNS capture point proves (section 5), where the filtered-port drop happened (section 7), and the full probe results (section 8). The screenshots are unchanged.
 
 ---
 
